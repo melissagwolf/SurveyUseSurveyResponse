@@ -1,0 +1,612 @@
+---
+title: "Survey Use May Influence Survey Response"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readxl)
+library(tidyverse)
+library(summarytools)
+library(sjmisc)
+library(patchwork)
+library(expss)
+library(sandwich)
+library(lmtest)
+library(DescTools)
+library(lubridate)
+```
+
+Note: The data attached is the raw data which includes the survey items in the second row.  These must be deleted before analyzing the data.  I manually deleted these in Excel.
+
+```{r}
+Data <- read_excel("Survey Use Survey Response Dataset April 20 2020.xlsx")
+```
+
+Descriptives
+
+```{r}
+#Gender
+frq(Data$Q7.14)
+#Sexual Orientation
+frq(Data$Q7.15)
+#Grades
+frq(Data$Q7.16)
+#Race/Ethnicity
+frq(Data$Q7.17)
+#Income
+frq(Data$Q7.18)
+```
+
+Create an indicator for whether or not they responded honestly
+
+```{r}
+Data$P1_Honest<- Data %>% 
+  mutate(P1_Honest=ifelse(Q3.4=="Answer honestly" & 
+                            Q3.5=="Answer honestly" &
+                            Q3.6=="Answer honestly" &
+                            Q3.7=="Answer honestly" &
+                            Q3.8=="Answer honestly",
+                          "Honest","Dishonest")) %>% 
+  pull()
+
+Data$P2_Honest <- Data %>% 
+  mutate(P2_Honest=ifelse(Q4.4=="Answer honestly" & 
+                            Q4.5=="Answer honestly" &
+                            Q4.6=="Answer honestly" &
+                            Q4.7=="Answer honestly" &
+                            Q4.8=="Answer honestly",
+                          "Honest","Dishonest")) %>% 
+  pull()
+
+Data$P3_Honest <- Data %>% 
+  mutate(P3_Honest=ifelse(Q5.4=="Answer honestly" & 
+                            Q5.5=="Answer honestly" &
+                            Q5.6=="Answer honestly" &
+                            Q5.7=="Answer honestly" &
+                            Q5.8=="Answer honestly",
+                          "Honest","Dishonest")) %>% 
+  pull()
+
+Data$P4_Honest <- Data %>% 
+  mutate(P4_Honest=ifelse(Q6.4=="Answer honestly" & 
+                            Q6.5=="Answer honestly" &
+                            Q6.6=="Answer honestly" &
+                            Q6.7=="Answer honestly" &
+                            Q6.8=="Answer honestly",
+                          "Honest","Dishonest")) %>% 
+  pull()
+```
+
+Time to transpose. Select the predictors (the responses to the DRI's) and the indicators we just created.  Also keep their participant ID.
+
+```{r}
+#Subset the data
+
+df1 <- Data %>% 
+  select(ResponseId,
+         Q3.10:Q3.15,
+         Q4.10:Q4.15,
+         Q5.10:Q5.15,
+         Q6.10:Q6.15,
+         P1_Honest:P4_Honest)
+
+df2 <- df1 %>% 
+  unite(col="Profile_1",Q3.10:Q3.15,P1_Honest) %>% 
+  unite(col="Profile_2",Q4.10:Q4.15,P2_Honest) %>%
+  unite(col="Profile_3",Q5.10:Q5.15,P3_Honest) %>%
+  unite(col="Profile_4",Q6.10:Q6.15,P4_Honest) %>% 
+  pivot_longer(cols=Profile_1:Profile_4,names_to = "Response") %>% 
+  separate(col="value",into=c("Comfort","Honest","Affect","Trust","Use","Other","Outcome"),sep="_") %>% 
+  select(-ResponseId,-Response)
+
+freq(df2$Outcome)
+```
+
+Run baseline linear model:
+
+```{r}
+#df2$Outcome[df2$Outcome=="NA"]<-NA
+
+df2$Outcome <- factor(df2$Outcome)
+
+class(df2$Outcome)
+
+df2$Outcome2<-as.numeric(df2$Outcome,na.rm=TRUE)
+
+freq(df2$Outcome2)
+
+#Use SPSS package to assign value labels
+df2$Outcome2[df2$Outcome2==2]<-0
+val_lab(df2$Outcome2)=num_lab("1 Dishonest
+                                     0 Honest")
+val_lab(df2$Outcome2)
+
+#Run baseline model
+baseline<-glm(Outcome2~Honest,data=df2,family=binomial(link="logit"))
+summary(baseline)
+coeftest(baseline,vcov = vcovHC(baseline, type = "HC1"))
+
+#save predicted values from baseline model
+Predb<-baseline$fit
+
+#append values to dataset
+df2$Predb<-Predb
+
+#categorize as pass/fail
+df2$Predb1 <- NA
+df2$Predb1[df2$Predb<.5]<-0
+df2$Predb1[df2$Predb>=.5]<-1
+
+#cross tabs (row,column)
+mytable1<-table(df2$Outcome2,df2$Predb1)
+mytable1
+prop.table(mytable1,1)
+dt<-as.data.frame.matrix(mytable1)
+```
+
+Prep variables for final model and graphing
+
+```{r}
+#Label NA's as NA
+#df2$Comfort[df2$Comfort=="NA"] <- NA
+#df2$Honest[df2$Honest=="NA"] <- NA
+#df2$Affect[df2$Affect=="NA"] <- NA
+#df2$Trust[df2$Trust=="NA"] <- NA
+#df2$Use[df2$Use=="NA"] <- NA
+#df2$Other[df2$Other=="NA"] <- NA
+
+#Need to establish factor order for the x-axis of bar graph
+df2$Comfort <- factor(df2$Comfort,
+                      levels=c("Yes, to all", "Mostly", "Sort of", "No, not really"))
+df2$Honest <- factor(df2$Honest,
+                     levels=c("Yes","No"))
+
+df2$Affect[df2$Affect=="Positively affect me"] <- "Positively"
+df2$Affect[df2$Affect=="Negatively affect me"] <- "Negatively"
+df2$Affect[df2$Affect=="Not affect me"] <- "No effect"
+df2$Affect <- factor(df2$Affect,
+                     levels=c("Positively","No effect","Negatively","Not sure"))
+df2$Trust <- factor(df2$Trust,
+                    levels=c("Yes","Mostly","Somewhat","No","Prefer not to say"))
+df2$Use <- factor(df2$Use,
+                  levels=c("Yes","Mostly","Somewhat","No","I don't know"))
+
+df2$Other[df2$Other=="All of them"] <- "All"
+df2$Other[df2$Other=="Most of them"] <- "Most"
+df2$Other[df2$Other=="Some of them"] <- "Some"
+df2$Other <- factor(df2$Other,
+                    levels=c("All","Most","Some","Hardly any"))
+
+#Look at the variables
+frq(df2$Comfort)
+frq(df2$Honest)
+frq(df2$Affect)
+frq(df2$Trust)
+frq(df2$Use)
+frq(df2$Other)
+```
+
+Run linear model for final model
+
+```{r}
+#Run model with all DRI's
+binomial<-glm(Outcome2~Comfort+Honest+Affect+Trust+Use+Other,data=df2,family=binomial(link="logit"))
+summary(binomial)
+coeftest(binomial,vcov = vcovHC(binomial, type = "HC1"))
+
+#save predicted values from binomial (full model)
+Predf<-binomial$fitted.values
+
+#append values to dataset
+df2$Predf<-Predf
+
+#categorize as pass/fail
+df2$Predf1 <- NA
+df2$Predf1[df2$Predf<.5]<-0
+df2$Predf1[df2$Predf>=.5]<-1
+
+#cross tabs (row,column)
+mytable<-table(df2$Outcome2,df2$Predf1)
+mytable
+prop.table(mytable,1)
+as.data.frame.matrix(mytable)
+
+#Compute R2 for glms
+PseudoR2(baseline, which = "Nagelkerke")
+PseudoR2(binomial, which = "Nagelkerke")
+```
+
+Odds ratios:
+
+```{r}
+df2$Outcome <- factor(df2$Outcome,
+                      levels = c("Honest","Dishonest"))
+
+frq(df2$Outcome)
+
+#Honest: 271
+#Dishonest: 293
+
+#Honest
+df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Honest) %>%
+  summarise(n=n())
+
+#Comfort
+df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Comfort) %>%
+  summarise(n=n())
+
+#Use
+df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Use) %>% 
+  summarise(n=n())
+
+#Trust
+df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Trust) %>% 
+  summarise(n=n())
+
+#Affect
+df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Affect) %>% 
+  summarise(n=n())
+
+#Other
+df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Other) %>% 
+  summarise(n=n())
+```
+
+
+Create proportions for bar charts:
+
+```{r}
+df2$Outcome <- factor(df2$Outcome,
+                      levels = c("Honest","Dishonest"))
+pc<- df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Comfort) %>%
+  summarise(n=n()) %>% 
+  mutate(Proportion=n/sum(n)) %>% 
+  ggplot(aes(x=Comfort,y=Proportion,fill=Outcome))+
+  geom_bar(stat='identity',position='dodge')+
+  ylim(0,1)+
+  scale_fill_manual(values=c("#C4C4C4","#808080"),
+                    breaks=c("Honest","Dishonest"),
+                    labels=c("Participant responded honestly",
+                             "Participant responded dishonestly"))+
+  theme(panel.background = element_rect("white"),
+        axis.line.x.bottom = element_line("black"),
+        axis.line.y.left = element_line("black"),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(y="")
+
+ph <- df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Honest) %>% 
+  summarise(n=n()) %>% 
+  mutate(Proportion=n/sum(n)) %>% 
+  ggplot(aes(x=Honest,y=Proportion,fill=Outcome))+
+  geom_bar(stat='identity',position=position_dodge(preserve = "single"),width = .5)+
+  ylim(0,1)+
+  labs(legend="")+
+  scale_fill_manual(values=c("#C4C4C4","#808080"),
+                    breaks=c("Honest","Dishonest"),
+                    labels=c("Participant responded honestly",
+                             "Participant responded dishonestly"))+
+  theme(panel.background = element_rect("white"),
+        axis.line.x.bottom = element_line("black"),
+        axis.line.y.left = element_line("black"),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(y="")
+
+pa<- df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Affect) %>%
+  summarise(n=n()) %>% 
+  mutate(Proportion=n/sum(n)) %>% 
+  ggplot(aes(x=Affect,y=Proportion,fill=Outcome))+
+  geom_bar(stat='identity',position='dodge')+
+  ylim(0,1)+
+  scale_fill_manual(values=c("#C4C4C4","#808080"),
+                    breaks=c("Honest","Dishonest"),
+                    labels=c("Participant responded honestly",
+                             "Participant responded dishonestly"))+
+  theme(panel.background = element_rect("white"),
+        axis.line.x.bottom = element_line("black"),
+        axis.line.y.left = element_line("black"),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(y="")
+
+pt<- df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Trust) %>%
+  summarise(n=n()) %>% 
+  mutate(Proportion=n/sum(n)) %>% 
+  ggplot(aes(x=Trust,y=Proportion,fill=Outcome))+
+  geom_bar(stat='identity',position='dodge')+
+  ylim(0,1)+
+  scale_fill_manual(values=c("#C4C4C4","#808080"),
+                    breaks=c("Honest","Dishonest"),
+                    labels=c("Participant responded honestly",
+                             "Participant responded dishonestly"))+
+  theme(panel.background = element_rect("white"),
+        axis.line.x.bottom = element_line("black"),
+        axis.line.y.left = element_line("black"),
+        legend.title = element_blank(),
+        legend.position = "none")+
+  labs(y="")
+
+pu<- df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Use) %>%
+  summarise(n=n()) %>% 
+  mutate(Proportion=n/sum(n)) %>% 
+  ggplot(aes(x=Use,y=Proportion,fill=Outcome))+
+  geom_bar(stat='identity',position='dodge')+
+  ylim(0,1)+
+  scale_fill_manual(values=c("#C4C4C4","#808080"),
+                    breaks=c("Honest","Dishonest"),
+                    labels=c("Participant responded honestly",
+                             "Participant responded dishonestly"))+
+  theme(panel.background = element_rect("white"),
+        axis.line.x.bottom = element_line("black"),
+        axis.line.y.left = element_line("black"),
+        legend.title = element_blank(),
+        legend.position = "bottom")+
+  labs(y="")
+
+po<- df2 %>% 
+  na.omit() %>% 
+  group_by(Outcome,Other) %>%
+  summarise(n=n()) %>% 
+  mutate(Proportion=n/sum(n)) %>% 
+  ggplot(aes(x=Other,y=Proportion,fill=Outcome))+
+  geom_bar(stat='identity',position='dodge')+
+  ylim(0,1)+
+  scale_fill_manual(values=c("#C4C4C4","#808080"),
+                    breaks=c("Honest","Dishonest"),
+                    labels=c("Participant responded honestly",
+                             "Participant responded dishonestly"))+
+  theme(panel.background = element_rect("white"),
+        axis.line.x.bottom = element_line("black"),
+        axis.line.y.left = element_line("black"),
+        legend.title = element_blank(),
+        legend.position = "bottom")+
+  labs(y="")
+
+ph + pc + pa + pt + pu + po + 
+  plot_layout(ncol=2,guides="collect")&
+  theme (legend.position="bottom")
+```
+
+Relationship between use and responses (figure)
+
+```{r}
+df3 <- Data %>% 
+  select(Q7.5:Q7.7) %>% 
+  gather(key="Variable",value="Response")
+
+df3$Response<-factor(df3$Response,levels=c("No, never", "Rarely", "Occasionally", "Fairly often", "Yes, regularly"))
+
+df3$Variable[df3$Variable=="Q7.5"] <- "When you take surveys, do you think about how the survey results will be used?"
+df3$Variable[df3$Variable=="Q7.6"] <- "Do you ever choose not to take a survey, stop taking a survey, or skip survey items because you don't like the way your answers will be used?"
+df3$Variable[df3$Variable=="Q7.7"] <- "Do you ever alter your survey answers to protect yourself because you don't like the way your answers will be used?"
+
+mytab <- df3 %>%
+  na.omit()%>%
+  group_by(Variable)%>%
+  count(Response) %>%
+  mutate(prop = prop.table(n))
+mytab
+
+#reverse = true to re-order bars on graph
+ggplot(mytab, aes(x = Variable, y = prop, fill = Response)) +
+  geom_bar(position = position_stack(reverse=TRUE), stat = "identity", width = .4) +
+  labs(y="Proportion", x="",col="")+
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 50))+
+  theme_classic()+
+  scale_fill_grey(start = 0.85, end = 0.3)+ 
+  theme(legend.title = element_blank())+
+  theme(legend.position="bottom", legend.spacing.x = unit(.2, 'cm'))+
+  theme(axis.text.y=element_text(size=12))+
+  theme(axis.title.x=element_text(size=10, color="grey35"))+
+  coord_flip()
+```
+
+Motivations for dishonest response
+
+```{r}
+df <- Data
+
+df$Purpose <- df$Q7.12_1
+df$Compensation <- df$Q7.12_2
+df$Interest <- df$Q7.12_3
+df$Use <- df$Q7.12_4
+df$Anonymity <- df$Q7.12_5
+df$HappenYou <- df$Q7.12_6
+df$HappenFF <- df$Q7.12_7
+df$HappenOther <- df$Q7.12_8
+df$Info <- df$Q7.12_9
+df$Benefit <- df$Q7.12_10
+df$Trust <- df$Q7.12_11
+df$Always <- df$Q7.12_12
+df$Incriminate <- df$Q7.12_13
+df$Other <- df$Q7.12_14
+
+df$Purpose <- factor(df$Purpose)
+df$Compensation <- factor(df$Compensation)
+df$Interest <- factor(df$Interest)
+df$Use <- factor(df$Use)
+df$Anonymity <- factor(df$Anonymity)
+df$HappenYou <- factor(df$HappenYou)
+df$HappenFF <- factor(df$HappenFF)
+df$HappenOther <- factor(df$HappenOther)
+df$Info <- factor(df$Info)
+df$Benefit <- factor(df$Benefit)
+df$Trust <- factor(df$Trust)
+df$Always <- factor(df$Always)
+df$Incriminate <- factor(df$Incriminate)
+df$Other <- factor(df$Other)
+
+#subset the data
+df_sub <- df %>% 
+  select(Q7.11:Q7.11_4,Purpose:Other)
+
+#Turn wide to long
+
+df5 <- df_sub %>% 
+  pivot_longer(cols = Q7.11:Q7.11_4, names_to = "Reason") %>% 
+  select(-Reason)
+
+df5$Reason <- df5$value
+
+df5 <- df5 %>% select(-value)
+
+df5$Reason <- factor(df5$Reason)
+
+frq(df5$Reason)
+
+df5 %>% 
+  filter(!is.na(Reason)) %>% 
+  group_by(Reason) %>% 
+  summarise(Count=n()) %>% 
+  mutate(Prop=Count/141) %>% 
+  arrange(-Prop) 
+
+df6 <- df_sub %>% 
+  pivot_longer(cols = Purpose:Other, names_to = "Motivation") %>% 
+  select(-Q7.11,-Q7.11_1,-Q7.11_2,-Q7.11_3,-Q7.11_4) %>% 
+  pivot_wider(names_from = value, values_fn = list(value=length)) %>% 
+  select(-"NA")
+
+df7 <- df6 %>% 
+  replace(is.na(.),0) %>% 
+  mutate(Total=rowSums(.[2:6]),
+         Prop=Total/141) %>% 
+  arrange(-Total) %>% 
+  select(Motivation,Prop,Never,Rarely,Sometimes,Usually,Always,Total)
+
+
+##COUNT:
+
+df4a <- df7
+
+#To turn count into proprotion, multiply by .7092
+
+100/141
+
+df4a <- df4a %>% 
+  mutate(Never=Never*.7092/100,
+         Rarely=Rarely*.7092/100,
+         Sometimes=Sometimes*.7092/100,
+         Usually=Usually*.7092/100,
+         Always=Always*.7092/100)
+
+#Need to manually add in the 19 ppl who said yes to when anonymous bc 
+#they didn't get asked the how often questions
+
+df4a[14,8]=19*.7092/100
+df4a[14,2]=19/141
+df4a[14,3]=19*.7092/100
+
+df5a <- df4a %>% 
+  mutate(Prop=round(Prop,4)) %>% 
+  mutate(Never=na_if(Never,"NaN"),
+         Rarely=na_if(Rarely,"NaN"),
+         Sometimes=na_if(Sometimes,"NaN"),
+         Usually=na_if(Usually,"NaN"),
+         Always=na_if(Always,"NaN"))
+
+df6a <- df5a %>% 
+  mutate(Motivation=replace(Motivation,Motivation=="Anonymity","Anonymity of my responses"),
+         Motivation=replace(Motivation,Motivation=="HappenYou","Assurance that nothing bad will happen to you"),
+         Motivation=replace(Motivation,Motivation=="Trust","Trust in the organization giving the survey"),
+         Motivation=replace(Motivation,Motivation=="Use","Specific explanation of how survey results will be used"),
+         Motivation=replace(Motivation,Motivation=="Incriminate","The survey questions don't incriminate me"),
+         Motivation=replace(Motivation,Motivation=="Interest","Personal interest in the survey topic"),
+         Motivation=replace(Motivation,Motivation=="HappenFF","Assurance that nothing bad will happen to your friends or family"),
+         Motivation=replace(Motivation,Motivation=="Purpose","Specific explanation of survey purpose"),
+         Motivation=replace(Motivation,Motivation=="Compensation","Financial compensation or course credit"),         
+         Motivation=replace(Motivation,Motivation=="HappenOther","Assurance that the nothing bad will happen to people who share your race/ethnicity, sexual orientation, gender, or economic class"),                            
+         Motivation=replace(Motivation,Motivation=="Benefit","Survey results are used to benefit survey takers"),                   
+         Motivation=replace(Motivation,Motivation=="Info","Links to more information about the survey topic or researchers"),                   
+         Motivation=replace(Motivation,Motivation=="Always","I always answer honestly no matter what"))
+
+df7a <- df6a %>% 
+  pivot_longer(cols=Never:Always,
+               names_to = "Response",
+               values_to = "Count")
+
+df7a$Motivation <- factor(df7a$Motivation,
+                         levels=c("Anonymity of my responses",
+                                  "Assurance that nothing bad will happen to you",
+                                  "Trust in the organization giving the survey",
+                                  "The survey questions don't incriminate me",
+                                  "Specific explanation of how survey results will be used",
+                                  "Assurance that nothing bad will happen to your friends or family",
+                                  "Personal interest in the survey topic",
+                                  "Specific explanation of survey purpose",
+                                  "Financial compensation or course credit",
+                                  "Assurance that the nothing bad will happen to people who share your race/ethnicity, sexual orientation, gender, or economic class",
+                                  "Survey results are used to benefit survey takers",
+                                  "Links to more information about the survey topic or researchers",
+                                  "Other",
+                                  "I always answer honestly no matter what"))
+
+df7a$Response <- factor(df7a$Response,
+                       levels=c("Never","Rarely","Sometimes","Usually","Always"))
+
+df7a %>% 
+  ggplot(aes(x=fct_rev(Motivation),y=Count,fill=Response))+
+  geom_bar(position = position_stack(reverse=TRUE), stat="identity")+
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 66))+
+  theme_classic()+
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.title.x=element_text(size=9, color="grey35"))+
+  ylim(0,1)+
+  scale_fill_grey(start=.85,end=.3)+
+  labs(y="Proportion",x="")+
+  #geom_text(aes(Motivation,Prop,label=gsub("0\\.", "\\.",Prop)), size=3,
+           # hjust=.3)+
+  coord_flip()
+```
+
+Did everyone lie?
+
+```{r}
+df3 <- df1 %>% 
+  unite(col="Profile_1",Q3.10:Q3.15,P1_Honest) %>% 
+  unite(col="Profile_2",Q4.10:Q4.15,P2_Honest) %>%
+  unite(col="Profile_3",Q5.10:Q5.15,P3_Honest) %>%
+  unite(col="Profile_4",Q6.10:Q6.15,P4_Honest) %>% 
+  pivot_longer(cols=Profile_1:Profile_4,names_to = "Response") %>% 
+  separate(col="value",into=c("Comfort","Honest","Affect","Trust","Use","Other","Outcome"),sep="_") %>% 
+  select(-Response)
+
+df4 <- df3 %>% 
+  count(ResponseId,Outcome) %>% 
+  group_by(ResponseId) %>% 
+  mutate(prop=prop.table(n))
+
+df5 <- df4 %>% 
+  group_by(Outcome) %>% 
+  count(prop)
+
+(141-12)/141
+```
+
